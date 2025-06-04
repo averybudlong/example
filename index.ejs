@@ -1,0 +1,52 @@
+//views/index.ejs
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Live MySQL Search</title>
+    <style>
+      body     { font: 16px/1.4 system-ui, sans-serif; padding: 2rem; }
+      #search  { padding: .5rem .75rem; width: 18rem; }
+      #results { margin-top: .75rem; list-style: none; padding-left: 0; }
+      #results li { padding: .25rem 0; border-bottom: 1px solid #e5e7eb; }
+    </style>
+  </head>
+
+  <body>
+    <h1>Instant Search</h1>
+
+    <input id="search" type="search" placeholder="Type a name…" autocomplete="off" />
+
+    <ul id="results"></ul>
+
+    <script>
+      const input    = document.getElementById('search');
+      const results  = document.getElementById('results');
+
+      /* --- simple debounce helper --- */
+      const debounce = (fn, delay = 300) => {
+        let timer;
+        return (...args) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn.apply(this, args), delay);
+        };
+      };
+
+      /* --- fetch & render helper --- */
+      async function query(term) {
+        if (!term) { results.innerHTML = ''; return; }
+
+        const res  = await fetch(`/search?q=${encodeURIComponent(term)}`);
+        const data = await res.json();   // [{id, name}, …]
+
+        results.innerHTML =
+          data.length === 0
+            ? '<li><em>No matches</em></li>'
+            : data.map(r => `<li>${r.name}</li>`).join('');
+      }
+
+      /* --- wire it up --- */
+      input.addEventListener('input', debounce(e => query(e.target.value), 300));
+    </script>
+  </body>
+</html>
