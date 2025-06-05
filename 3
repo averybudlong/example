@@ -1,0 +1,259 @@
+// db.js  (CommonJS)
+const mysql = require('mysql2/promise');
+
+const pool = mysql.createPool({
+  host            : 'localhost',
+  user            : 'root',
+  password        : 'my-secret-pw',
+  database        : 'demo',
+  waitForConnections : true,
+  connectionLimit : 10,
+  queueLimit      : 0,
+});
+
+/* ── either of these is fine ── */
+// module.exports = pool;          // export the pool directly
+module.exports = { pool };        // export as a named property
+
+// routes/table.js  (CommonJS)
+const express = require('express');
+const { pool } = require('../db');          // ← pull the pool in
+
+const router = express.Router();
+
+/* ---------- /table page ---------- */
+router.get('/table', async (_, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id, name, age, location FROM people ORDER BY id DESC LIMIT 50'
+    );
+    res.render('table', { people: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
+});
+
+/* ---------- /search AJAX ---------- */
+router.get('/search', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json([]);
+
+  const isNumber  = /^\d+$/.test(q);
+  const likeParam = `%${q}%`;
+
+  const sql = `
+    SELECT id, name, age, location
+    FROM   people
+    WHERE  name     LIKE ?
+       OR  location LIKE ?
+       OR  bio      LIKE ?
+       ${isNumber ? 'OR age = ?' : ''}
+    LIMIT  25
+  `;
+
+  const params = isNumber
+    ? [likeParam, likeParam, likeParam, Number(q)]
+    : [likeParam, likeParam, likeParam];
+
+  try {
+    const [rows] = await pool.execute(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+module.exports = router;          // <─ export the router
+
+// server.js  (CommonJS)
+const express = require('express');
+const path    = require('path');
+const tableRouter = require('./routes/table');   // ← bring in the router
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+/* ── view engine & static ── */
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+app.use(express.static(path.join(__dirname, 'public')));
+
+/* ── home page ── */
+app.get('/', (_, res) => res.render('home'));
+
+/* ── mount the “table” feature ── */
+app.use('/', tableRouter);        // /table & /search now live
+
+/* ── go ── */
+app.listen(PORT, () =>
+  console.log(`💻  http://localhost:${PORT}  (Ctrl-C to quit)`));
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>People Table</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 2rem; line-height: 1.45; }
+    h1   { margin: 0 0 1rem; }
+
+    /* search bar */
+    #search { width: 18rem; padding: .5rem .75rem; font-size: 1rem; }
+
+    /* table styling */
+    table        { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td       { padding: .55rem .75rem; border: 1px solid #e5e7eb; text-align: left; }
+    th           { background: #f3f4f6; }
+    tbody tr:nth-child(odd) { background: #fafafa; }
+    .empty       { text-align: center; font-style: italic; color: #6b7280; }
+  </style>
+</head>
+
+<body>
+  <h1>People</h1>
+
+  <input
+    id="search"
+    type="search"
+    placeholder="Search name, age, location…"
+    autocomplete="off"
+  />
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Age</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+
+    <tbody id="results">
+      <% if (people.length === 0) { %>
+        <tr><td class="empty" colspan="4">No records</td></tr>
+      <% } else { %>
+        <% people.forEach(p => { %>
+          <tr>
+            <td><%= p.id %></td>
+            <td><%= p.name %></td>
+            <td><%= p.age %></td>
+            <td><%= p.location %></td>
+          </tr>
+        <% }) %>
+      <% } %>
+    </tbody>
+  </table>
+
+  <script>
+    const input    = document.getElementById('search');
+    const results  = document.getElementById('results');
+    const original = results.innerHTML;        // keep server-rendered rows
+
+    /* simple debounce */
+    const debounce = (fn, delay = 300) => {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    };
+
+    /* fetch + render */
+    async function query(term) {
+      if (!term) {                // empty box → restore original rows
+        results.innerHTML = original;
+        return;
+      }
+
+      const res  = await fetch(`/search?q=${encodeURIComponent(term)}`);
+      const data = await res.json();  // [{id,name,age,location}, …]
+
+      results.innerHTML =
+        data.length === 0
+          ? '<tr><td class="empty" colspan="4">No matches</td></tr>'
+          : data.map(r => `
+              <tr>
+                <td>${r.id}</td>
+                <td>${r.name}</td>
+                <td>${r.age}</td>
+                <td>${r.location}</td>
+              </tr>
+            `).join('');
+    }
+
+    /* wire it up */
+    input.addEventListener('input', debounce(e => query(e.target.value.trim()), 300));
+  </script>
+</body>
+</html>
+
+
+-------------------------
+
+
+async function query({ term, equipmentId, model, serialNum }) {
+  const qs = new URLSearchParams();
+
+  if (term)        qs.append('q', term);
+  if (equipmentId) qs.append('equipmentId', equipmentId);
+  if (model)       qs.append('model', model);
+  if (serialNum)   qs.append('serialNum', serialNum);
+
+  const res  = await fetch(`/search?${qs.toString()}`);
+  const data = await res.json();
+  …
+}
+
+router.get('/search', async (req, res) => {
+  const { q, equipmentId, model, serialNum } = req.query;
+
+  /* ---- Build SQL dynamically ---- */
+  const where = [];
+  const args  = [];
+
+  // generic text search on name/location/bio
+  if (q && q.trim() !== '') {
+    where.push('(name LIKE ? OR location LIKE ? OR bio LIKE ?)');
+    const like = `%${q.trim()}%`;
+    args.push(like, like, like);
+  }
+
+  if (equipmentId) {
+    where.push('equipment_id = ?');
+    args.push(equipmentId);
+  }
+
+  if (model) {
+    where.push('model = ?');
+    args.push(model);
+  }
+
+  if (serialNum) {
+    where.push('serial_num = ?');
+    args.push(serialNum);
+  }
+
+  /* fall-back: no filters ⇒ return empty or all, your call */
+  if (where.length === 0) {
+    return res.json([]);          // or omit this to return whole table
+  }
+
+  const sql = `
+    SELECT id, name, age, location, equipment_id, model, serial_num
+    FROM   people
+    WHERE  ${where.join(' AND ')}
+    LIMIT  50
+  `;
+
+  try {
+    const [rows] = await pool.execute(sql, args);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'DB error' });
+  }
+});
